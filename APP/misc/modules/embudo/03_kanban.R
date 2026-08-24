@@ -62,7 +62,8 @@ KanbanEmbudo <- function(id, usuario) {
     # paint, en vez de selectInput + updateSelectInput (que ademas
     # generaba el desalineado visual entre Asesor y Origen/DetOrigen)
     output$Origen_ui <- renderUI({
-      origenes <- pipeline_raw()$Origen %>% unique() %>% sort()
+      origenes <- pipeline_raw()$Origen
+      origenes <- sort(unique(origenes[!is.na(origenes) & nzchar(origenes)]))
       ListaDesplegable(ns("filtro_origen"), label = h6("Origen"),
                        choices = c("Todos", origenes), selected = "Todos", multiple = FALSE, size = 8)
     })
@@ -78,7 +79,8 @@ KanbanEmbudo <- function(id, usuario) {
                        choices = c("Todos", det), selected = "Todos", multiple = FALSE, size = 8)
     })
     output$Asesor_ui <- renderUI({
-      asesores <- pipeline_raw()$Asesor %>% unique() %>% sort()
+      asesores <- pipeline_raw()$Asesor
+      asesores <- sort(unique(asesores[!is.na(asesores) & nzchar(asesores)]))
       ListaDesplegable(ns("filtro_asesor"), label = h6("Asesor"),
                        choices = c("Todos", asesores), selected = "Todos", multiple = FALSE, size = 8)
     })
@@ -200,6 +202,13 @@ KanbanEmbudo <- function(id, usuario) {
     observeEvent(input$AccionSeleccionada, {
       seleccion <- input$AccionSeleccionada
       req(seleccion$codigo, seleccion$accion)
+
+      # El payload viene del navegador y puede ser manipulado. Solo se
+      # despachan acciones conocidas y habilitadas para la etapa actual.
+      fila <- pipeline_filtrado() %>% filter(CodContacto == seleccion$codigo) %>% slice_head(n = 1)
+      req(nrow(fila) == 1L)
+      acciones_permitidas <- .acciones_por_etapa_kanban(fila$Etapa[[1]])
+      req(seleccion$accion %in% acciones_permitidas)
       
       if (identical(seleccion$accion, "Reactivar")) {
         # Nonce en trigger_reactivar para que el dedup interno de Reactivar
@@ -212,9 +221,11 @@ KanbanEmbudo <- function(id, usuario) {
       
       codigo_seleccionado(seleccion$codigo)
       accion_seleccionada(seleccion$accion)
-      titulo_modal_actual(.CONFIG_ACCIONES_EMBUDO[[seleccion$accion]]$etiqueta %||% seleccion$accion)
+      config_accion <- .CONFIG_ACCIONES_EMBUDO[[seleccion$accion]]
+      req(!is.null(config_accion), !is.null(.REGISTRO_MODULOS_KANBAN[[seleccion$accion]]))
+      titulo_modal_actual(config_accion$etiqueta %||% seleccion$accion)
       
-      clase_modal <- .CONFIG_ACCIONES_EMBUDO[[seleccion$accion]]$modal %||% "subventana2"
+      clase_modal <- config_accion$modal %||% "subventana2"
       
       modal_construido <- modalDialog(title = titulo_modal_actual(), uiOutput(ns("ModalContenido")),
                                       easyClose = TRUE, footer = modalButton("Cerrar"))

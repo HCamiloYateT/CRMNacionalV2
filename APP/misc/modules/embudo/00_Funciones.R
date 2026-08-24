@@ -550,10 +550,19 @@ generar_codigo_contacto <- function() {
 ## Kanban ----
 # Semaforo de gestion segun dias sin gestion (ok / warning / critical)
 .semaforo_gestion <- function(dias) {
-  dplyr::case_when(dias >= 30 ~ "critical", dias >= 15 ~ "warning", TRUE ~ "ok")
+  dias <- suppressWarnings(as.numeric(dias))
+  dplyr::case_when(
+    is.na(dias) ~ "ok",
+    dias >= 30 ~ "critical",
+    dias >= 15 ~ "warning",
+    TRUE ~ "ok"
+  )
 }
 # Badge HTML con icono y dias, coloreado segun .semaforo_gestion()
 .html_badge_gestion <- function(dias) {
+  dias <- suppressWarnings(as.numeric(dias))
+  if (length(dias) != 1L || is.na(dias)) dias <- 0
+  dias <- max(0, dias)
   estado <- .semaforo_gestion(dias)
   icono <- switch(estado, critical = "fas fa-exclamation-triangle",
                   warning = "fas fa-clock", "fas fa-check-circle")
@@ -580,7 +589,12 @@ generar_codigo_contacto <- function() {
 # Carga el pipeline completo del embudo (todas las etapas) para el kanban
 cargar_pipeline_embudo <- function() {
   contactos <- derivar_etapa_actual() %>% derivar_fecha_entrada_etapa()
-  lead_data <- CargarDatos("CONTACTOLEAD") %>% select(CodContacto, Asesor, Segmento, LinNegocio)
+  # CONTACTOLEAD puede conservar mas de un registro por contacto. Un join
+  # directo multiplicaba las tarjetas y distorsionaba los contadores.
+  lead_data <- CargarDatos("CONTACTOLEAD") %>%
+    select(CodContacto, Asesor, Segmento, LinNegocio) %>%
+    group_by(CodContacto) %>%
+    summarise(across(c(Asesor, Segmento, LinNegocio), dplyr::first), .groups = "drop")
   alianzas <- tryCatch(CargarDatos("CRMNALPROSPECTOALIANZA") %>% count(CodContacto, name = "NumAlianzas"),
                        error = function(e) data.frame(CodContacto = character(), NumAlianzas = integer()))
   if (!"EtapaPreDescarte" %in% names(contactos)) contactos$EtapaPreDescarte <- NA_character_
@@ -590,21 +604,14 @@ cargar_pipeline_embudo <- function() {
     mutate(
       EtapaPreDescarte = ifelse(is.na(EtapaPreDescarte), "CONTACTO", EtapaPreDescarte),
       NumAlianzas = coalesce(NumAlianzas, 0),
-      DiasEnEtapa = as.numeric(difftime(Sys.time(), FechaEntradaEtapa, units = "days")),
+      DiasEnEtapa = pmax(0, as.numeric(difftime(Sys.time(), FechaEntradaEtapa, units = "days"))),
       EstadoGestion = .semaforo_gestion(DiasEnEtapa)
     )
 }
 # Acciones disponibles en el kanban, segun etapa del contacto
 .acciones_por_etapa_kanban <- function(etapa) {
-  switch(
-    etapa,
-    "CONTACTO" = c("Editar", "Relacionamiento", "Promover", "CrearOportunidad", "Descartar"),
-    "LEAD" = c("Editar", "Relacionamiento", "Promover", "CrearOportunidad", "Descartar"),
-    "PROSPECTO" = c("Editar", "Relacionamiento", "Promover", "CrearOportunidad", "Descartar"),
-    "CLIENTE" = c("Editar", "Relacionamiento", "CrearOportunidad"),
-    "DESCARTADO" = c("Editar", "Reactivar"),
-    character(0)
-  )
+  acciones <- .ACCIONES_ETAPA_EMBUDO[[as.character(etapa)[1]]]
+  if (is.null(acciones)) character(0) else acciones
 }
 # Renderiza la tarjeta HTML de un contacto en el kanban, segun su etapa
 .render_tarjeta_embudo <- function(fila) {
@@ -2164,4 +2171,3 @@ tokenizar_motivos_libres <- function(cod_contacto_vec, historial_dat) {
     }
   )
 }
-
